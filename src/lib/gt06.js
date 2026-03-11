@@ -18,20 +18,21 @@ Gt06.prototype.parse = function (data) {
   this.msgBufferRaw.length = 0;
   const parsed = { expectsResponse: false };
 
-  if (!checkHeader(data)) {
-    throw { error: 'unknown message header', msg: data };
+  const headerType = checkHeader(data);
+  if (!headerType) {
+    throw { error: 'unknown message header', msg: data.toString('hex') };
   }
 
   this.msgBufferRaw = sliceMsgsInBuff(data).slice();
 
   this.msgBufferRaw.forEach((msg, idx) => {
-    const event = selectEvent(msg);
+    const event = selectEvent(msg, headerType);
 
     switch (event.number) {
       case 0x01: // login
         Object.assign(parsed, parseLogin(msg));
         parsed.expectsResponse = true;
-        parsed.responseMsg = createResponse(msg);
+        parsed.responseMsg = createResponse(msg, headerType);
         break;
       case 0x12: // location
         Object.assign(parsed, parseLocation(msg), { imei: this.imei });
@@ -39,13 +40,16 @@ Gt06.prototype.parse = function (data) {
       case 0x13: // status / heartbeat
         Object.assign(parsed, parseStatus(msg), { imei: this.imei });
         parsed.expectsResponse = true;
-        parsed.responseMsg = createResponse(msg);
+        parsed.responseMsg = createResponse(msg, headerType);
         break;
       case 0x16: // alarm
         Object.assign(parsed, parseAlarm(msg), { imei: this.imei });
         break;
+      case 0x15: // string info (some GT06 variants)
+        Object.assign(parsed, { imei: this.imei });
+        break;
       default:
-        throw { error: 'unknown message type', event };
+        throw { error: 'unknown message type', protocol: '0x' + event.number.toString(16), hex: msg.toString('hex') };
     }
 
     parsed.event = event;
@@ -62,20 +66,27 @@ Gt06.prototype.clearMsgBuffer = function () {
   this.msgBuffer.length = 0;
 };
 
-// ─── Header check ───────────────────────────────────────────────────────────
+// ─── Header check (returns 'short'|'long'|false) ───────────────────────────
 function checkHeader(data) {
-  return data.length >= 2 && data[0] === 0x78 && data[1] === 0x78;
+  if (data.length < 2) return false;
+  if (data[0] === 0x78 && data[1] === 0x78) return 'short';
+  if (data[0] === 0x79 && data[1] === 0x79) return 'long';
+  return false;
 }
 
 // ─── Event selector ─────────────────────────────────────────────────────────
-function selectEvent(data) {
+function selectEvent(data, headerType) {
   const EVENTS = {
     0x01: 'login',
     0x12: 'location',
     0x13: 'status',
+    0x15: 'string',
     0x16: 'alarm',
   };
-  return { number: data[3], string: EVENTS[data[3]] || 'unknown' };
+  // short header: length at [2], protocol at [3]
+  // long header: length at [2..3] (2 bytes), protocol at [4]
+  const protocolIdx = headerType === 'long' ? 4 : 3;
+  return { number: data[protocolIdx], string: EVENTS[data[protocolIdx]] || 'unknown' };
 }
 
 // ─── Login (0x01) ───────────────────────────────────────────────────────────
@@ -204,9 +215,10 @@ function parseAlarm(data) {
 }
 
 // ─── Response builder ───────────────────────────────────────────────────────
-function createResponse(data) {
+function createResponse(data, headerType) {
   const resp = Buffer.from('787805FF0001d9dc0d0a', 'hex');
-  resp[3] = data[3]; // protocol number from request
+  const protocolIdx = headerType === 'long' ? 4 : 3;
+  resp[3] = data[protocolIdx]; // protocol number from request
   appendCrc16(resp);
   return resp;
 }
@@ -235,27 +247,30 @@ function appendCrc16(data) {
 }
 
 function sliceMsgsInBuff(data) {
-  const startPattern = Buffer.from('7878', 'hex');
-  let nextStart = data.indexOf(startPattern, 2);
+  const shortHeader = Buffer.from('7878', 'hex');
+  const longHeader = Buffer.from('7979', 'hex');
   const msgArray = [];
 
-  if (nextStart === -1) {
-    msgArray.push(Buffer.from(data));
-    return msgArray;
-  }
+  let pos = 0;
+  while (pos < data.length) {
+    let nextShort = data.indexOf(shortHeader, pos + 2);
+    let nextLong = data.indexOf(longHeader, pos + 2);
 
-  msgArray.push(Buffer.from(data.slice(0, nextStart)));
-  let remaining = Buffer.from(data.slice(nextStart));
+    // Find earliest next message start
+    let nextStart = -1;
+    if (nextShort !== -1 && nextLong !== -1) nextStart = Math.min(nextShort, nextLong);
+    else if (nextShort !== -1) nextStart = nextShort;
+    else if (nextLong !== -1) nextStart = nextLong;
 
-  while (true) {
-    nextStart = remaining.indexOf(startPattern, 2);
     if (nextStart === -1) {
-      msgArray.push(Buffer.from(remaining));
-      return msgArray;
+      msgArray.push(Buffer.from(data.slice(pos)));
+      break;
     }
-    msgArray.push(Buffer.from(remaining.slice(0, nextStart)));
-    remaining = Buffer.from(remaining.slice(nextStart));
+    msgArray.push(Buffer.from(data.slice(pos, nextStart)));
+    pos = nextStart;
   }
+
+  return msgArray;
 }
 
 module.exports = Gt06;

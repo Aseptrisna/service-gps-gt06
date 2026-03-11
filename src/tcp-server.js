@@ -35,44 +35,53 @@ function handleConnection(socket) {
   socket.setTimeout(5 * 60 * 1000);
 
   socket.on('data', async (data) => {
+    log.info(`[TCP] Raw data from ${addr} (${data.length} bytes): ${data.toString('hex')}`);
+
     try {
       tracker.parse(data);
+    } catch (e) {
+      log.error(`[GPS] Parse error (${addr}):`, e.error || e.message || e);
+      return;
+    }
 
-      // Send response if the protocol requires it (login, status)
-      if (tracker.expectsResponse && tracker.responseMsg) {
-        socket.write(tracker.responseMsg);
-      }
+    // Send ACK response if needed (login, status)
+    if (tracker.expectsResponse && tracker.responseMsg) {
+      socket.write(tracker.responseMsg);
+    }
 
-      currentImei = tracker.imei ? String(tracker.imei) : currentImei;
-      const event = tracker.event?.string || 'unknown';
+    // Process all messages in buffer (same pattern as working code)
+    const messagePromises = tracker.msgBuffer.map(async (msg) => {
+      const eventType = msg.event?.string || 'unknown';
+      currentImei = msg.imei ? String(msg.imei) : currentImei;
 
-      switch (event) {
+      switch (eventType) {
         case 'login':
           log.info(`[GPS] Login  IMEI=${currentImei} (${addr})`);
           await onLogin(currentImei);
           break;
 
         case 'location':
-          log.info(`[GPS] Loc    IMEI=${currentImei}  lat=${tracker.lat} lon=${tracker.lon} spd=${tracker.speed}`);
-          await onLocation(currentImei, tracker);
+          log.info(`[GPS] Loc    IMEI=${currentImei}  lat=${msg.lat} lon=${msg.lon} spd=${msg.speed}`);
+          await onLocation(currentImei, msg);
           break;
 
         case 'status':
-          log.info(`[GPS] Status IMEI=${currentImei}  batt=${tracker.voltageLevel} gsm=${tracker.gsmSigStrength}`);
-          await onStatus(currentImei, tracker);
+          log.info(`[GPS] Status IMEI=${currentImei}  batt=${msg.voltageLevel} gsm=${msg.gsmSigStrength}`);
+          await onStatus(currentImei, msg);
           break;
 
         case 'alarm':
-          log.warn(`[GPS] Alarm  IMEI=${currentImei}  type=${parseAlarmType(tracker.terminalInfo)}`);
-          await onAlarm(currentImei, tracker);
+          log.warn(`[GPS] Alarm  IMEI=${currentImei}  type=${parseAlarmType(msg.terminalInfo)}`);
+          await onAlarm(currentImei, msg);
           break;
 
         default:
-          log.debug(`[GPS] Unknown event "${event}" from ${addr}`);
+          log.debug(`[GPS] Unhandled event "${eventType}" from ${addr}`);
       }
-    } catch (err) {
-      log.error(`[GPS] Parse error (${addr}):`, err.error || err.message || err);
-    }
+    });
+
+    await Promise.all(messagePromises);
+    tracker.clearMsgBuffer();
   });
 
   socket.on('timeout', () => {
