@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
+    "gt06": "^1.0.12",
     "mongoose": "^8.9.5",
     "socket.io": "^4.8.1"
   },
