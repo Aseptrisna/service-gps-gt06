@@ -1,0 +1,29 @@
+[Unit]
+Description=TrackPro GPS Worker - GT06 Receiver
+Documentation=https://github.com/vondraussen/gt06
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+User=trackpro
+Group=trackpro
+WorkingDirectory=/opt/trackpro/gps-worker
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trackpro-gps
+
+# Environment
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/trackpro/gps-worker/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trackpro/gps-worker
+
+[Install]
+WantedBy=multi-user.target

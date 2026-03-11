@@ -1,0 +1,18 @@
+{
+  "name": "trackpro-gps-worker",
+  "version": "1.0.0",
+  "description": "TrackPro GPS GT06 Tracker Worker — receives TCP data from GT06 devices, saves to MongoDB, broadcasts via WebSocket",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "mongoose": "^8.9.5",
+    "socket.io": "^4.8.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
