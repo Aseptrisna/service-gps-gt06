@@ -170,6 +170,8 @@ async function onLogin(imei) {
     );
     if (!device) {
       log.warn(`[GPS] Unknown device IMEI=${imei} — not registered in database`);
+    } else {
+      log.info(`[DB] ✅ Login saved IMEI=${imei} device=${device.device_name} vehicle_id=${device.vehicle_id || 'none'}`);
     }
   } catch (e) {
     log.error('[DB] Login error:', e.message);
@@ -210,6 +212,13 @@ async function onLocation(imei, t) {
 
     const saved = await GpsData.create(record);
 
+    log.info(`[DB] ✅ Location saved _id=${saved._id} IMEI=${imei}`);
+    log.info(`[DB]    Data: ${JSON.stringify({
+      latitude: t.lat, longitude: t.lon, speed: t.speed, course: t.course,
+      fixTime: t.fixTime, satCnt: t.satCnt, gpsPositioned: t.gpsPositioned,
+      vehicle_id: device?.vehicle_id?.toString() || null,
+    })}`);
+
     // Broadcast to WebSocket clients
     if (io) {
       const payload = {
@@ -236,10 +245,15 @@ async function onLocation(imei, t) {
 
 async function onStatus(imei, t) {
   try {
-    await Device.findOneAndUpdate(
+    const device = await Device.findOneAndUpdate(
       { imei },
       { status: 'online', last_seen: new Date() },
     );
+
+    log.info(`[DB] ✅ Status saved IMEI=${imei}`);
+    log.info(`[DB]    Data: ${JSON.stringify({
+      terminalInfo: t.terminalInfo, voltageLevel: t.voltageLevel, gsmSigStrength: t.gsmSigStrength,
+    })}`);
 
     if (io) {
       io.to('all_vehicles').emit('device_status', {
@@ -269,7 +283,7 @@ async function onAlarm(imei, t) {
 
     // Alarm packets also carry location data — save it
     if (t.lat && t.lon) {
-      await GpsData.create({
+      const saved = await GpsData.create({
         imei,
         vehicle_id: device?.vehicle_id || null,
         latitude: t.lat,
@@ -284,6 +298,12 @@ async function onAlarm(imei, t) {
           gpsSignal: t.gpsSignal,
         },
       });
+
+      log.info(`[DB] ✅ Alarm saved _id=${saved._id} IMEI=${imei}`);
+      log.info(`[DB]    Data: ${JSON.stringify({
+        alarmType, latitude: t.lat, longitude: t.lon, speed: t.speed,
+        voltageLevel: t.voltageLevel, vehicle_id: device?.vehicle_id?.toString() || null,
+      })}`);
     }
 
     if (io) {
