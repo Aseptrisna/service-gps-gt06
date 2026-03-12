@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 // Matches the existing backend Device schema (collection: devices)
 const schema = new mongoose.Schema(
   {
+    owner:        { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     imei:         { type: String, required: true, unique: true },
     device_name:  { type: String, required: true },
     vehicle_id:   { type: mongoose.Schema.Types.ObjectId, ref: 'Vehicle', default: null },
