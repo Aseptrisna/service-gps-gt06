@@ -64,6 +64,11 @@ Gt06.prototype.parse = function (data) {
       case 0x16: // alarm
         Object.assign(parsed, parseAlarm(msg), { imei: this.imei });
         break;
+      case 0x22: // GPS + LBS + Status combined (GT06N)
+        Object.assign(parsed, parseGpsLbsStatus(msg), { imei: this.imei });
+        parsed.expectsResponse = true;
+        parsed.responseMsg = createResponse(msg);
+        break;
       default:
         throw { error: `unknown message type 0x${event.number.toString(16).padStart(2, '0')}`, event };
     }
@@ -100,6 +105,7 @@ function selectEvent(data) {
     0x12: 'location',
     0x13: 'status',
     0x16: 'alarm',
+    0x22: 'location', // GT06N combined GPS + LBS + Status
   };
   return { number: data[3], string: EVENTS[data[3]] || 'unknown' };
 }
@@ -226,6 +232,60 @@ function parseAlarm(data) {
     gpsSignal: ds.gpsSignal,
     alarmLang: ds.alarmLang,
     serialNr: ds.serialNr,
+  };
+}
+
+// ─── GPS + LBS + Status combined (0x22) ────────────────────────────────────
+// Same GPS frame as 0x12, then 3 extra status bytes before the serial number.
+// Offsets: time(4..9) qty(10) lat(11..14) lon(15..18) speed(19) course(20..21)
+//          mcc(22..23) mnc(24) lac(25..26) cellId(27..29)
+//          termInfo(30) voltage(31) gsm(32) serial(33..34) CRC(35..36)
+function parseGpsLbsStatus(data) {
+  const ds = {
+    fixTime:  data.slice(4, 10),
+    quantity: data.readUInt8(10),
+    lat:      data.readUInt32BE(11),
+    lon:      data.readUInt32BE(15),
+    speed:    data.readUInt8(19),
+    course:   data.readUInt16BE(20),
+    mcc:      data.readUInt16BE(22),
+    mnc:      data.readUInt8(24),
+    lac:      data.readUInt16BE(25),
+    cellId:   parseInt(data.slice(27, 30).toString('hex'), 16),
+    termByte: data.readUInt8(30),
+    voltage:  data.readUInt8(31),
+    gsm:      data.readUInt8(32),
+    serialNr: data.readUInt16BE(33),
+  };
+
+  const fixDate = parseDatetime(ds.fixTime);
+  const VOLTAGE = {
+    1: 'extremely_low', 2: 'very_low', 3: 'low',
+    4: 'medium',        5: 'high',     6: 'very_high',
+  };
+  const GSM = { 1: 'extremely_weak', 2: 'very_weak', 3: 'good', 4: 'strong' };
+
+  return {
+    fixTime:        fixDate.toISOString(),
+    fixTimestamp:   fixDate.getTime() / 1000,
+    satCnt:         (ds.quantity & 0xf0) >> 4,
+    satCntActive:   ds.quantity & 0x0f,
+    lat:            decodeGt06Lat(ds.lat, ds.course),
+    lon:            decodeGt06Lon(ds.lon, ds.course),
+    speed:          ds.speed,
+    speedUnit:      'km/h',
+    realTimeGps:    Boolean(ds.course & 0x2000),
+    gpsPositioned:  Boolean(ds.course & 0x1000),
+    eastLongitude:  !Boolean(ds.course & 0x0800),
+    northLatitude:  Boolean(ds.course & 0x0400),
+    course:         ds.course & 0x3ff,
+    mcc:            ds.mcc,
+    mnc:            ds.mnc,
+    lac:            ds.lac,
+    cellId:         ds.cellId,
+    voltageLevel:   VOLTAGE[ds.voltage] || 'no_power',
+    gsmSigStrength: GSM[ds.gsm]         || 'no_signal',
+    serialNr:       ds.serialNr,
   };
 }
 
