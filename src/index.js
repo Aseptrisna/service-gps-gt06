@@ -9,6 +9,7 @@ async function main() {
   log.info('  TrackPro GPS Worker v1.0.0');
   log.info('  GT06 GPS Tracker Receiver');
   log.info('══════════════════════════════════════════');
+  log.info('UPDATE SOURCE IN BANDAR LAMPUNG');
 
   // 1. Connect to MongoDB
   await connect();
