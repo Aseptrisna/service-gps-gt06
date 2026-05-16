@@ -65,7 +65,7 @@ Gt06.prototype.parse = function (data) {
         Object.assign(parsed, parseAlarm(msg), { imei: this.imei });
         break;
       default:
-        throw { error: 'unknown message type', event };
+        throw { error: `unknown message type 0x${event.number.toString(16).padStart(2, '0')}`, event };
     }
 
     parsed.event = event;

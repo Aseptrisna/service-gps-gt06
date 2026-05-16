@@ -35,6 +35,7 @@ function handleConnection(socket) {
   socket.setTimeout(5 * 60 * 1000);
 
   socket.on('data', async (data) => {
+    log.debug(`[TCP] Raw data from ${addr} (${data.length} bytes): ${data.toString('hex')}`);
     try {
       tracker.parse(data);
 
@@ -71,7 +72,7 @@ function handleConnection(socket) {
           log.debug(`[GPS] Unknown event "${event}" from ${addr}`);
       }
     } catch (err) {
-      log.error(`[GPS] Parse error (${addr}):`, err.error || err.message || err);
+      log.error(`[GPS] Parse error (${addr}): ${err.error || err.message || err} | raw: ${data.toString('hex')}`);
     }
   });
 
