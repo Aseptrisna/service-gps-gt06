@@ -22,6 +22,26 @@ Gt06.prototype.parse = function (data) {
     throw { error: 'unknown message header', msg: data };
   }
 
+  // GT06N extended protocol (7979) — 2-byte length field, proto at index 4
+  if (isExtended(data)) {
+    this.msgBufferRaw = sliceMsgsExtended(data).slice();
+
+    this.msgBufferRaw.forEach((msg, idx) => {
+      const proto = msg[4];
+      Object.assign(parsed, parseExtendedMsg(msg, this.imei));
+      parsed.event = { number: proto, string: parsed._extType || 'unknown' };
+      delete parsed._extType;
+      parsed.parseTime = Date.now();
+
+      if (idx === this.msgBufferRaw.length - 1) {
+        Object.assign(this, parsed);
+      }
+      this.msgBuffer.push({ ...parsed });
+    });
+    return;
+  }
+
+  // Standard GT06 protocol (7878) — 1-byte length field, proto at index 3
   this.msgBufferRaw = sliceMsgsInBuff(data).slice();
 
   this.msgBufferRaw.forEach((msg, idx) => {
@@ -64,7 +84,13 @@ Gt06.prototype.clearMsgBuffer = function () {
 
 // ─── Header check ───────────────────────────────────────────────────────────
 function checkHeader(data) {
-  return data.length >= 2 && data[0] === 0x78 && data[1] === 0x78;
+  if (data.length < 2) return false;
+  return (data[0] === 0x78 && data[1] === 0x78) || // GT06  standard protocol
+         (data[0] === 0x79 && data[1] === 0x79);    // GT06N extended protocol
+}
+
+function isExtended(data) {
+  return data[0] === 0x79 && data[1] === 0x79;
 }
 
 // ─── Event selector ─────────────────────────────────────────────────────────
@@ -201,6 +227,81 @@ function parseAlarm(data) {
     alarmLang: ds.alarmLang,
     serialNr: ds.serialNr,
   };
+}
+
+// ─── GT06N extended protocol (7979) ─────────────────────────────────────────
+// Frame: [7979] [2-byte length] [proto] [data…] [2-byte serial] [2-byte CRC] [0d0a]
+// The "length" field counts bytes from proto through CRC (inclusive).
+// Therefore: serial starts at byte index (2 + 2 + length - 4) = length.
+
+function parseExtendedMsg(data, imei) {
+  const proto = data[4];
+  const length = data.readUInt16BE(2);
+  // serial is at offset `length` (the 4th-from-last byte in the length region)
+  const serial = data.readUInt16BE(length);
+
+  // Message types that require an ACK
+  const ACK_TYPES = new Set([
+    0x01, 0x10, 0x12, 0x13, 0x14, 0x16,
+    0x22, 0x34, 0x35, 0x94,
+  ]);
+
+  const result = { imei };
+
+  if (ACK_TYPES.has(proto)) {
+    result.expectsResponse = true;
+    result.responseMsg = createExtendedResponse(proto, serial);
+  }
+
+  switch (proto) {
+    case 0x94: // Information transmission (GT06N keepalive / status)
+      result._extType = 'info';
+      break;
+    default:
+      result._extType = `unknown_ext_0x${proto.toString(16).padStart(2, '0')}`;
+      break;
+  }
+
+  return result;
+}
+
+function createExtendedResponse(proto, serial) {
+  // Response: [7979] [0005] [proto] [2-byte serial] [2-byte CRC] [0d0a]
+  // length = 5: proto(1) + serial(2) + CRC(2)
+  const resp = Buffer.alloc(11);
+  resp[0] = 0x79; resp[1] = 0x79;
+  resp.writeUInt16BE(0x0005, 2);
+  resp[4] = proto;
+  resp.writeUInt16BE(serial, 5);
+  // CRC over bytes 2..6 (length field + proto + serial)
+  const crc = getCrc16(resp.slice(2, 7));
+  resp.writeUInt16BE(crc.readUInt16BE(0), 7);
+  resp[9] = 0x0d; resp[10] = 0x0a;
+  return resp;
+}
+
+function sliceMsgsExtended(data) {
+  const startPattern = Buffer.from('7979', 'hex');
+  let nextStart = data.indexOf(startPattern, 2);
+  const msgArray = [];
+
+  if (nextStart === -1) {
+    msgArray.push(Buffer.from(data));
+    return msgArray;
+  }
+
+  msgArray.push(Buffer.from(data.slice(0, nextStart)));
+  let remaining = Buffer.from(data.slice(nextStart));
+
+  while (true) {
+    nextStart = remaining.indexOf(startPattern, 2);
+    if (nextStart === -1) {
+      msgArray.push(Buffer.from(remaining));
+      return msgArray;
+    }
+    msgArray.push(Buffer.from(remaining.slice(0, nextStart)));
+    remaining = Buffer.from(remaining.slice(nextStart));
+  }
 }
 
 // ─── Response builder ───────────────────────────────────────────────────────
